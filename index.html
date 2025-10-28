@@ -7,17 +7,27 @@
   <style>
     #map { width: 100%; height: 500px; }
     #controls { margin: 10px 0; font-family: Arial, sans-serif; }
+    select, input { margin: 5px; padding: 5px; }
   </style>
 </head>
 <body>
-  <h2>Enter Two Locations to Get Driving Route</h2>
+  <h2>Enter Locations to Get Driving Route</h2>
   <div id="controls">
-    <input type="text" id="origin" placeholder="Origin (e.g., Boston)">
-    <input type="text" id="destination" placeholder="Destination (e.g., New York)">
+    <input type="text" id="origin" placeholder="Origin (e.g., Springfield)">
+    <button onclick="searchPlace('origin')">Search Origin</button>
+    <select id="origin-options"></select><br>
+
+    <input type="text" id="destination" placeholder="Destination (e.g., Boston)">
+    <button onclick="searchPlace('destination')">Search Destination</button>
+    <select id="destination-options"></select><br>
+
     <button onclick="getRoute()">Get Route</button>
   </div>
   <div id="map"></div>
-  <div id="info">Distance: <span id="distance">0</span> km, Duration: <span id="duration">0</span> min</div>
+  <div id="info">
+    <strong>Distance:</strong> <span id="distance">0</span> km<br>
+    <strong>Estimated Time:</strong> <span id="duration">0</span> minutes
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/ol@latest/dist/ol.js"></script>
   <script>
@@ -25,7 +35,7 @@
       target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({
-        center: ol.proj.fromLonLat([-73.935242, 40.730610]), // Default center (New York)
+        center: ol.proj.fromLonLat([-73.935242, 40.730610]), // Default center
         zoom: 6
       })
     });
@@ -43,14 +53,24 @@
     });
     map.addLayer(vectorLayer);
 
-    async function geocode(place) {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`;
+    async function searchPlace(type) {
+      const query = document.getElementById(type).value;
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`;
       const res = await fetch(url);
       const data = await res.json();
-      if (data.length > 0) {
-        return [parseFloat(data[0].lon), parseFloat(data[0].lat)];
-      } else {
-        throw new Error(`Location not found: ${place}`);
+
+      const select = document.getElementById(`${type}-options`);
+      select.innerHTML = "";
+
+      data.forEach((place) => {
+        const option = document.createElement("option");
+        option.value = `${place.lon},${place.lat}`;
+        option.text = place.display_name;
+        select.appendChild(option);
+      });
+
+      if (data.length === 0) {
+        alert(`No matches found for ${type}`);
       }
     }
 
@@ -59,33 +79,31 @@
       document.getElementById('distance').textContent = '0';
       document.getElementById('duration').textContent = '0';
 
-      const originText = document.getElementById('origin').value;
-      const destinationText = document.getElementById('destination').value;
+      const originCoords = document.getElementById('origin-options').value;
+      const destinationCoords = document.getElementById('destination-options').value;
 
-      try {
-        const origin = await geocode(originText);
-        const destination = await geocode(destinationText);
+      if (!originCoords || !destinationCoords) {
+        alert("Please select both origin and destination from the dropdowns.");
+        return;
+      }
 
-        const url = `https://router.project-osrm.org/route/v1/driving/${origin[0]},${origin[1]};${destination[0]},${destination[1]}?overview=full&geometries=geojson`;
-        const res = await fetch(url);
-        const data = await res.json();
+      const url = `https://router.project-osrm.org/route/v1/driving/${originCoords};${destinationCoords}?overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      const data = await res.json();
 
-        if (data.code === "Ok") {
-          const route = data.routes[0];
-          const line = new ol.geom.LineString(route.geometry.coordinates).transform('EPSG:4326', 'EPSG:3857');
-          vectorSource.addFeature(new ol.Feature({ geometry: line }));
+      if (data.code === "Ok") {
+        const route = data.routes[0];
+        const line = new ol.geom.LineString(route.geometry.coordinates).transform('EPSG:4326', 'EPSG:3857');
+        vectorSource.addFeature(new ol.Feature({ geometry: line }));
 
-          const distanceKm = route.distance / 1000;
-          const durationMin = route.duration / 60;
-          document.getElementById('distance').textContent = distanceKm.toFixed(2);
-          document.getElementById('duration').textContent = durationMin.toFixed(1);
+        const distanceKm = route.distance / 1000;
+        const durationMin = route.duration / 60;
+        document.getElementById('distance').textContent = distanceKm.toFixed(2);
+        document.getElementById('duration').textContent = durationMin.toFixed(1);
 
-          map.getView().fit(line.getExtent(), { padding: [50, 50, 50, 50] });
-        } else {
-          alert("Routing failed: " + data.code);
-        }
-      } catch (err) {
-        alert(err.message);
+        map.getView().fit(line.getExtent(), { padding: [50, 50, 50, 50] });
+      } else {
+        alert("Routing failed: " + data.code);
       }
     }
   </script>
