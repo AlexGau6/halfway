@@ -2,15 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>OpenLayers + OSRM Routing</title>
+  <title>Driving Route Finder</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css">
   <style>
     #map { width: 100%; height: 500px; }
-    #info { margin-top: 10px; font-family: Arial, sans-serif; }
+    #controls { margin: 10px 0; font-family: Arial, sans-serif; }
   </style>
 </head>
 <body>
-  <h2>Click Two Points to Get Driving Route</h2>
+  <h2>Enter Two Locations to Get Driving Route</h2>
+  <div id="controls">
+    <input type="text" id="origin" placeholder="Origin (e.g., Boston)">
+    <input type="text" id="destination" placeholder="Destination (e.g., New York)">
+    <button onclick="getRoute()">Get Route</button>
+  </div>
   <div id="map"></div>
   <div id="info">Distance: <span id="distance">0</span> km, Duration: <span id="duration">0</span> min</div>
 
@@ -20,53 +25,69 @@
       target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({
-        center: ol.proj.fromLonLat([-72.2518, 41.8084]), // UConn
-        zoom: 8
+        center: ol.proj.fromLonLat([-73.935242, 40.730610]), // Default center (New York)
+        zoom: 6
       })
     });
 
-    const points = [];
     const vectorSource = new ol.source.Vector();
-    const vectorLayer = new ol.layer.Vector({ source: vectorSource });
+    const routeStyle = new ol.style.Style({
+      stroke: new ol.style.Stroke({
+        color: '#ff0000', // Bright red
+        width: 5          // Thicker line
+      })
+    });
+    const vectorLayer = new ol.layer.Vector({
+      source: vectorSource,
+      style: routeStyle
+    });
     map.addLayer(vectorLayer);
 
-    map.on('click', function (event) {
-      if (points.length >= 2) {
-        points.length = 0;
-        vectorSource.clear();
-        document.getElementById('distance').textContent = '0';
-        document.getElementById('duration').textContent = '0';
+    async function geocode(place) {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(place)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.length > 0) {
+        return [parseFloat(data[0].lon), parseFloat(data[0].lat)];
+      } else {
+        throw new Error(`Location not found: ${place}`);
       }
+    }
 
-      const coord = ol.proj.toLonLat(event.coordinate);
-      points.push(coord);
+    async function getRoute() {
+      vectorSource.clear();
+      document.getElementById('distance').textContent = '0';
+      document.getElementById('duration').textContent = '0';
 
-      const feature = new ol.Feature({
-        geometry: new ol.geom.Point(event.coordinate)
-      });
-      vectorSource.addFeature(feature);
+      const originText = document.getElementById('origin').value;
+      const destinationText = document.getElementById('destination').value;
 
-      if (points.length === 2) {
-        const url = `https://router.project-osrm.org/route/v1/driving/${points[0][0]},${points[0][1]};${points[1][0]},${points[1][1]}?overview=full&geometries=geojson`;
+      try {
+        const origin = await geocode(originText);
+        const destination = await geocode(destinationText);
 
-        fetch(url)
-          .then(res => res.json())
-          .then(data => {
-            if (data.code === "Ok") {
-              const route = data.routes[0];
-              const line = new ol.geom.LineString(route.geometry.coordinates).transform('EPSG:4326', 'EPSG:3857');
-              vectorSource.addFeature(new ol.Feature({ geometry: line }));
+        const url = `https://router.project-osrm.org/route/v1/driving/${origin[0]},${origin[1]};${destination[0]},${destination[1]}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
 
-              const distanceKm = route.distance / 1000;
-              const durationMin = route.duration / 60;
-              document.getElementById('distance').textContent = distanceKm.toFixed(2);
-              document.getElementById('duration').textContent = durationMin.toFixed(1);
-            } else {
-              alert("Routing failed: " + data.code);
-            }
-          });
+        if (data.code === "Ok") {
+          const route = data.routes[0];
+          const line = new ol.geom.LineString(route.geometry.coordinates).transform('EPSG:4326', 'EPSG:3857');
+          vectorSource.addFeature(new ol.Feature({ geometry: line }));
+
+          const distanceKm = route.distance / 1000;
+          const durationMin = route.duration / 60;
+          document.getElementById('distance').textContent = distanceKm.toFixed(2);
+          document.getElementById('duration').textContent = durationMin.toFixed(1);
+
+          map.getView().fit(line.getExtent(), { padding: [50, 50, 50, 50] });
+        } else {
+          alert("Routing failed: " + data.code);
+        }
+      } catch (err) {
+        alert(err.message);
       }
-    });
+    }
   </script>
 </body>
 </html>
