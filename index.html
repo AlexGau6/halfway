@@ -7,7 +7,7 @@
   <style>
     #map { width: 100%; height: 500px; }
     #controls { margin: 10px 0; font-family: Arial, sans-serif; }
-    select, input { margin: 5px; padding: 5px; }
+    select, input, button { margin: 5px; padding: 5px; }
   </style>
 </head>
 <body>
@@ -20,6 +20,19 @@
     <input type="text" id="destination" placeholder="Destination (e.g., Boston)">
     <button onclick="searchPlace('destination')">Search Destination</button>
     <select id="destination-options"></select><br>
+
+    <label for="halfway-mode">Halfway Marker:</label>
+    <select id="halfway-mode">
+      <option value="distance">By Distance</option>
+      <option value="time">By Time</option>
+    </select><br>
+
+    <label for="radius">Search Radius:</label>
+    <input type="number" id="radius" placeholder="e.g. 10" min="1">
+    <select id="radius-unit">
+      <option value="km">km</option>
+      <option value="mi">miles</option>
+    </select><br>
 
     <button onclick="getRoute()">Get Route</button>
   </div>
@@ -35,7 +48,7 @@
       target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({
-        center: ol.proj.fromLonLat([-73.935242, 40.730610]), // Default center
+        center: ol.proj.fromLonLat([-73.935242, 40.730610]),
         zoom: 6
       })
     });
@@ -43,8 +56,8 @@
     const vectorSource = new ol.source.Vector();
     const routeStyle = new ol.style.Style({
       stroke: new ol.style.Stroke({
-        color: '#ff0000', // Bright red
-        width: 5          // Thicker line
+        color: '#ff0000',
+        width: 5
       })
     });
     const vectorLayer = new ol.layer.Vector({
@@ -81,6 +94,7 @@
 
       const originCoords = document.getElementById('origin-options').value;
       const destinationCoords = document.getElementById('destination-options').value;
+      const mode = document.getElementById('halfway-mode').value;
 
       if (!originCoords || !destinationCoords) {
         alert("Please select both origin and destination from the dropdowns.");
@@ -102,9 +116,86 @@
         document.getElementById('duration').textContent = durationMin.toFixed(1);
 
         map.getView().fit(line.getExtent(), { padding: [50, 50, 50, 50] });
+
+        const halfwayCoord = getHalfwayCoord(route, mode);
+        addHalfwayMarker(halfwayCoord);
+        searchNearbyPlaces(halfwayCoord);
       } else {
         alert("Routing failed: " + data.code);
       }
+    }
+
+    function getHalfwayCoord(route, mode) {
+      const coords = route.geometry.coordinates;
+      const totalDistance = route.distance;
+      const totalDuration = route.duration;
+      const halfwayTarget = mode === "distance" ? totalDistance / 2 : totalDuration / 2;
+
+      let accumulated = 0;
+      let halfwayCoord = coords[0];
+
+      for (let i = 1; i < coords.length; i++) {
+        const [lon1, lat1] = coords[i - 1];
+        const [lon2, lat2] = coords[i];
+        const point1 = ol.proj.fromLonLat([lon1, lat1]);
+        const point2 = ol.proj.fromLonLat([lon2, lat2]);
+        const segment = new ol.geom.LineString([point1, point2]);
+        const segmentLength = ol.sphere.getLength(segment);
+        const segmentDuration = (segmentLength / totalDistance) * totalDuration;
+
+        accumulated += mode === "distance" ? segmentLength : segmentDuration;
+
+        if (accumulated >= halfwayTarget) {
+          halfwayCoord = [lon2, lat2];
+          break;
+        }
+      }
+
+      return halfwayCoord;
+    }
+
+    function addHalfwayMarker(coord) {
+      const halfwayPoint = new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat(coord))
+      });
+
+      halfwayPoint.setStyle(new ol.style.Style({
+        image: new ol.style.Circle({
+          radius: 6,
+          fill: new ol.style.Fill({ color: 'blue' }),
+          stroke: new ol.style.Stroke({ color: 'white', width: 2 })
+        })
+      }));
+
+      vectorSource.addFeature(halfwayPoint);
+    }
+
+    function searchNearbyPlaces(coord) {
+      const radius = parseFloat(document.getElementById('radius').value);
+      const unit = document.getElementById('radius-unit').value;
+      if (isNaN(radius)) return;
+
+      const radiusKm = unit === "mi" ? radius * 1.60934 : radius;
+      const [lon, lat] = coord;
+      const overpassUrl = `https://overpass-api.de/api/interpreter?data=[out:json];node(around:${radiusKm * 1000},${lat},${lon})[amenity];out;`;
+
+      fetch(overpassUrl)
+        .then(res => res.json())
+        .then(data => {
+          data.elements.forEach(el => {
+            const feature = new ol.Feature({
+              geometry: new ol.geom.Point(ol.proj.fromLonLat([el.lon, el.lat]))
+            });
+            feature.setStyle(new ol.style.Style({
+              image: new ol.style.Circle({
+                radius: 4,
+                fill: new ol.style.Fill({ color: 'green' }),
+                stroke: new ol.style.Stroke({ color: 'white', width: 1 })
+              })
+            }));
+            vectorSource.addFeature(feature);
+          });
+        });
     }
   </script>
 </body>
